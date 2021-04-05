@@ -1,0 +1,13 @@
+7a,z
+78,x
+63,c
+ffe3,ctrl_l
+ffe1,shift_l
+ff0d,enter
+ffe2,shift_r
+ffe4,ctrl_r
+ff52,up
+ff51,left
+ff54,down
+ff53,right
+ff1b,esc
