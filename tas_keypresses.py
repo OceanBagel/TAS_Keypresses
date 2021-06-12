@@ -114,8 +114,11 @@ def keypressLoop(masterKeyList, carryTrigger, carryAmount, frameMicros, fps):
     debugNumCharPressess = 0
     debugNumKeynamePresses = 0
     debugNumKeycodePresses = 0
+    debugMicrosLate = 0
+    debugMaxMicrosLate = 0
     
     wakeUpTimer = 34000
+    wakeDelta = 1000
     loopStart = time()*1000000
     
     carry = 0
@@ -155,13 +158,15 @@ def keypressLoop(masterKeyList, carryTrigger, carryAmount, frameMicros, fps):
         totalTime = frameMicros + carry
         
         
-        inactiveTime = sleepLoop(loopStart, cumulativeMicros, wakeUpTimer)
+        inactiveTime, wakeUpTimer, wakeDelta = sleepLoop(loopStart, cumulativeMicros, wakeUpTimer, wakeDelta)
                
 
 
         if debug == 1:
             debugStatsCount += 1
             debugActivePercentSum += 100*((totalTime - inactiveTime)/totalTime)
+            debugMicrosLate += time()*1000000 - loopStart - cumulativeMicros
+            debugMaxMicrosLate = max(debugMaxMicrosLate, time()*1000000 - loopStart - cumulativeMicros)
             if debugStatsCount >= fps:
                 debugStatsCount = 0
                 
@@ -173,6 +178,14 @@ def keypressLoop(masterKeyList, carryTrigger, carryAmount, frameMicros, fps):
                 debugNumCharPressess = 0
                 debugNumKeynamePresses = 0
                 debugNumKeycodePresses = 0
+                
+                print("{} average micros late".format(round(debugMicrosLate/fps, 3)))
+                debugMicrosLate = 0
+                
+                print("{} max micros late".format(debugMaxMicrosLate))
+                debugMaxMicrosLate = 0
+                
+                print("{} wake delta value".format(wakeDelta))
                 
                 print()
         
@@ -192,9 +205,10 @@ def keypressLoop(masterKeyList, carryTrigger, carryAmount, frameMicros, fps):
         debugNumKeycodePresses += debugKeycodePressesDelta
         
 
-def sleepLoop(loopStart, cumulativeMicros, wakeUpTimer):
+def sleepLoop(loopStart, cumulativeMicros, wakeUpTimer, wakeDelta):
     sleepCheck = False
     inactiveTime = 0
+    wakeDeltaDelta = 10
     
     while ((time()*1000000 - loopStart)) < cumulativeMicros:
         #Sleep loop
@@ -210,18 +224,20 @@ def sleepLoop(loopStart, cumulativeMicros, wakeUpTimer):
             #Only check once per loop and adjust the sleep time to maximize sleep without losing accuracy
             newDiffTime = cumulativeMicros-(time()*1000000 - loopStart)
             if (newDiffTime) < 0:
-                wakeUpTimer += 1000
-            elif newDiffTime > 1000:
-                wakeUpTimer -= 1000
-            if wakeUpTimer < 1000:
-                wakeUpTimer = 1000
+                wakeUpTimer += wakeDelta
+            elif newDiffTime > wakeDelta:
+                wakeUpTimer -= wakeDelta
+            elif wakeDelta > wakeDeltaDelta:
+                wakeDelta -= wakeDeltaDelta                
+            if wakeUpTimer < wakeDelta:
+                wakeUpTimer = wakeDelta
             sleepCheck = True
-    return inactiveTime
+    return inactiveTime, wakeUpTimer, wakeDelta
 
 
 def main():
 
-    print("TAS Keypresses v1.0")
+    print("TAS Keypresses v1.0.1")
     print("By OceanBagel\n")
     
     print("This script requires two files in the same directory as the script: an ltm file and mapping.txt.")
