@@ -4,18 +4,15 @@ from time import sleep, time
 import tarfile
 from traceback import format_exc
 from os.path import isfile
-from math import gcd
 #from collections import OrderedDict
 #NOTE: This code relies on the Python 3.6+ implementation of guaranteed dict order.
 #If this code is run on 3.5-, OrderedDict must be used instead.
 
 
+version = "v1.1.0"
 keyboard = Controller()
 debug = isfile("debug.txt")
 
-
-def lcm(x, y):
-    return x * y // gcd(x, y)
 
 
 def fileParser(tasName):
@@ -24,6 +21,7 @@ def fileParser(tasName):
     #keyMapDictNotOrdered = {}
     keyMapDict = {}    
     masterKeyList = []
+    masterFramerateList = []
     
     with open("mapping.txt") as fid:
         line = fid.readline().strip("\n").split(",")
@@ -44,16 +42,27 @@ def fileParser(tasName):
             
             while line != ['']:
                 masterKeyList.append([])
+                masterFramerateList.append([])
                 line[-1] = line[-1].strip("|.")
                 line[0] = line[0].strip("K")
+                line = "|".join(line).split("|")                
                 for j,k in keyMapDict.items():
                     if j in line:
                         masterKeyList[i].append(k)
                     else:
                         masterKeyList[i].append(-1)
+                if len(line) > 1 and line[-2].startswith("T"):
+                    masterFramerateList[i] = [int(line[-2].strip("T")), int(line[-1])] # Represents a framerate change, format [num, den]
+                else:
+                    masterFramerateList[i] = [0, 0] # Represents no framerate change
+
+                    
+                        
+                        
                 i += 1
                 line = fid.readline().decode('utf-8').strip("\n").strip("|").split(":")
             masterKeyList.append("EOF")
+            masterFramerateList.append("EOF")
             
             fid.close()
             fid = tid.extractfile('config.ini')
@@ -75,7 +84,7 @@ def fileParser(tasName):
         raise
     
     
-    return keyMapDict, masterKeyList, num, den
+    return keyMapDict, masterKeyList, num, den, masterFramerateList
 
 
 def pressKeys(keypressList, lastKeypressList):
@@ -108,7 +117,7 @@ def releaseKeys(keyReleaseList):
                 keyboard.release(KeyCode.from_vk(int(keyReleaseList[i])))
                 
                 
-def keypressLoop(masterKeyList, carryTrigger, carryAmount, frameMicros, fps):
+def keypressLoop(masterKeyList, masterFramerateList, standardFrameMicros, fps):
     debugStatsCount = 0
     debugActivePercentSum = 0
     debugNumCharPressess = 0
@@ -118,12 +127,13 @@ def keypressLoop(masterKeyList, carryTrigger, carryAmount, frameMicros, fps):
     debugMaxMicrosLate = 0
     
     wakeUpTimer = 34000
-    wakeDelta = 1000
+    wakeDelta = 100
     loopStart = time()*1000000
-    
-    carry = 0
-    carryCount = 0
+    minSleep = 1000 # Minimum microseconds per frame, under which sleep will not happen
+    inactiveTime = 0
+
     cumulativeMicros = 0
+    cumulativeCarry = 0
     
     frameIndex = 0
     keypressList = masterKeyList[frameIndex]
@@ -133,13 +143,6 @@ def keypressLoop(masterKeyList, carryTrigger, carryAmount, frameMicros, fps):
     
     while masterKeyList[frameIndex] != "EOF":
         # Get all the prep work done up here to reduce time in the input pressing section
-        
-        carryCount += 1
-        if carryCount == carryTrigger:
-            carryCount = 0
-            carry = carryAmount
-        else:
-            carry = 0
         
         
         lastKeypressList = keypressList
@@ -153,24 +156,45 @@ def keypressLoop(masterKeyList, carryTrigger, carryAmount, frameMicros, fps):
                 keyReleaseList[i] = -1
             
             
-        frameIndex += 1  
-        cumulativeMicros += frameMicros + carry
-        totalTime = frameMicros + carry
         
         
-        inactiveTime, wakeUpTimer, wakeDelta = sleepLoop(loopStart, cumulativeMicros, wakeUpTimer, wakeDelta)
-               
+        # Calculate frame length for variable fps or take the standard frame length for fixed fps
+        if masterFramerateList[frameIndex][1] == 0:
+            frameMicros = standardFrameMicros
+        else:
+            frameMicros = 1000000 * masterFramerateList[frameIndex][1] / masterFramerateList[frameIndex][0]
+        
+        # Subtract off the non-integer portion and store it in frameCarry
+        frameCarry = frameMicros - int(frameMicros)
+        frameMicros -= frameCarry
+        
+        cumulativeCarry += frameCarry
+        
+        # Add integer portion of cumulativeCarry to frameMicros and subtract it off
+        if cumulativeCarry >= 1:
+            frameMicros += int(cumulativeCarry)
+            cumulativeCarry -= int(cumulativeCarry)
+        
+        cumulativeMicros += frameMicros
+        
+        frameIndex += 1
+        
+        inactiveTime, wakeUpTimer, wakeDelta = sleepLoop(loopStart, cumulativeMicros, wakeUpTimer, wakeDelta, minSleep)
 
 
         if debug == 1:
             debugStatsCount += 1
-            debugActivePercentSum += 100*((totalTime - inactiveTime)/totalTime)
+            if frameMicros > 0:
+                debugActivePercentSum += 100*((frameMicros - inactiveTime) / frameMicros)
             debugMicrosLate += time()*1000000 - loopStart - cumulativeMicros
             debugMaxMicrosLate = max(debugMaxMicrosLate, time()*1000000 - loopStart - cumulativeMicros)
+            
+            
+            
             if debugStatsCount >= fps:
-                debugStatsCount = 0
+                 # Display the debug stats approximately once per second
                 
-                print("{}% active".format(round(debugActivePercentSum/fps, 3)))
+                print("{}% active".format(round(debugActivePercentSum/debugStatsCount, 3)))
                 debugActivePercentSum = 0
                 
                 print("{0} char presses\n{1} keyname presses\n{2} keycode presses"\
@@ -187,9 +211,9 @@ def keypressLoop(masterKeyList, carryTrigger, carryAmount, frameMicros, fps):
                 
                 print("{} wake delta value".format(wakeDelta))
                 
-                print()
+                print("{} wake timer value\n".format(wakeUpTimer))
         
-        
+                debugStatsCount = 0
         
         
         
@@ -205,16 +229,17 @@ def keypressLoop(masterKeyList, carryTrigger, carryAmount, frameMicros, fps):
         debugNumKeycodePresses += debugKeycodePressesDelta
         
 
-def sleepLoop(loopStart, cumulativeMicros, wakeUpTimer, wakeDelta):
+def sleepLoop(loopStart, cumulativeMicros, wakeUpTimer, wakeDelta, minSleep):
     sleepCheck = False
     inactiveTime = 0
-    wakeDeltaDelta = 10
+    wakeDeltaDelta = 100
+    minWakeUpTime = 1000
     
     while ((time()*1000000 - loopStart)) < cumulativeMicros:
         #Sleep loop
 
-        diffTime = cumulativeMicros-(time()*1000000 - loopStart)
-        if (diffTime - wakeUpTimer) > 0:
+        diffTime = cumulativeMicros-(time()*1000000 - loopStart) # Amount of time to wait
+        if (diffTime - wakeUpTimer) > minSleep: # Check for minimum sleep with extra time for waking up
                        
             sleep((diffTime-wakeUpTimer)/1000000)
             inactiveTime = diffTime-wakeUpTimer
@@ -223,21 +248,28 @@ def sleepLoop(loopStart, cumulativeMicros, wakeUpTimer, wakeDelta):
         if sleepCheck == False:
             #Only check once per loop and adjust the sleep time to maximize sleep without losing accuracy
             newDiffTime = cumulativeMicros-(time()*1000000 - loopStart)
-            if (newDiffTime) < 0:
+            if (newDiffTime) < -minWakeUpTime:
+                wakeUpTimer += wakeDelta * 500
+                wakeDelta += wakeDeltaDelta
+            elif (newDiffTime) < 0:
                 wakeUpTimer += wakeDelta
+                wakeDelta += wakeDeltaDelta
             elif newDiffTime > wakeDelta:
                 wakeUpTimer -= wakeDelta
+                wakeDelta += wakeDeltaDelta
+            elif wakeDelta > wakeDeltaDelta * 5:
+                wakeDelta -= wakeDeltaDelta * 5     
             elif wakeDelta > wakeDeltaDelta:
-                wakeDelta -= wakeDeltaDelta                
-            if wakeUpTimer < wakeDelta:
-                wakeUpTimer = wakeDelta
+                wakeDelta -= wakeDeltaDelta
+            if wakeUpTimer < minWakeUpTime:
+                wakeUpTimer = minWakeUpTime
             sleepCheck = True
     return inactiveTime, wakeUpTimer, wakeDelta
 
 
 def main():
 
-    print("TAS Keypresses v1.0.1")
+    print("TAS Keypresses " + version)
     print("By OceanBagel\n")
     
     print("This script requires two files in the same directory as the script: an ltm file and mapping.txt.")
@@ -253,30 +285,17 @@ def main():
         tasName += ".ltm"
     print()
     
-    keyMapDict, masterKeyList, num, den = fileParser(tasName)
+    keyMapDict, masterKeyList, num, den, masterFramerateList = fileParser(tasName)
     
     fps = num/den
 
 
 
-    # Correction factors. After carryTrigger number of frames, carryAmount microseconds are added to the timer.
-    # This corrects for error due to using an integer number of microseconds, and avoids floating point rounding error.
-    frameMicros = int(1000000/num)
-    remainder = 1000000-(frameMicros*num)
-    if remainder == 0:
-        carryTrigger = 3
-        carryAmount = 0
-    else:
-        carryTrigger = round(lcm(remainder, num)/remainder)
-        carryAmount = round((remainder*carryTrigger)/num)
-    
-    #Multiply frameMicros and carryTrigger by den so frames are longer by a factor of den
-    frameMicros *= den
-    carryTrigger *= den
-        
+    # Calculate the number of micros in a standard frame to use whenever fps isn't set for that frame    
+    standardFrameMicros = 1000000 * den / num        
     
     if debug == 1:
-        print("{0} fps, {1} micros, {2} carry trigger, {3} carry amount".format(fps, frameMicros, carryTrigger, carryAmount))
+        print("{0} fps, {1} micros".format(fps, standardFrameMicros))
         print()
     
     print("There will be a 10 second countdown followed by the start of the TAS.")
@@ -292,7 +311,7 @@ def main():
     print("\nBeginning keypresses...")
     
     #This function executes the keypresses and timing loop
-    keypressLoop(masterKeyList, carryTrigger, carryAmount, frameMicros, fps)
+    keypressLoop(masterKeyList, masterFramerateList, standardFrameMicros, fps)
     
     
     #Release the keys at the end, for when the tas file ends with a keypress
