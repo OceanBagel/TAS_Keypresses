@@ -9,7 +9,7 @@ from os.path import isfile
 #If this code is run on 3.5-, OrderedDict must be used instead.
 
 
-version = "v1.1.0"
+version = "v1.1.1"
 keyboard = Controller()
 debug = isfile("debug.txt")
 
