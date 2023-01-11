@@ -17,7 +17,7 @@ ff57,end
 ff63,insert
 ff67,menu
 ff7f,num_lock
-ff80,space
+20,space
 ff89,tab
 ff8d,enter
 ff91,f1
